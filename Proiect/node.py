@@ -194,7 +194,11 @@ class P2PNode:
                     
                 elif msg_type == "EXEC_RES":
                     # We received the result of an execution
-                    print(f"\n[RESULT] Task {msg['task_id']} completed on thread {msg['thread_id']}. Result: {msg['result']}")
+                    status = msg.get("status", "OK")
+                    if status == "ERROR":
+                        print(f"\n[ERROR] Task {msg['task_id']} failed on thread {msg['thread_id']}: {msg['result']}")
+                    else:
+                        print(f"\n[RESULT] Task {msg['task_id']} completed on thread {msg['thread_id']}. Result: {msg['result']}")
                     
         except Exception as e:
             # Socket closed or error
@@ -279,10 +283,31 @@ class P2PNode:
         task_id = msg["task_id"]
         requester_info = msg["requester"] # (ip, port)
         
-        module = importlib.import_module(module_name)
-        cls = getattr(module, class_name)
-        instance = cls()
-        method = getattr(instance, method_name)
+        try:
+            module = importlib.import_module(module_name)
+            if not hasattr(module, class_name):
+                raise AttributeError(f"Clasa '{class_name}' nu a fost gasita in modulul '{module_name}'.")
+            cls = getattr(module, class_name)
+            instance = cls()
+            if not hasattr(instance, method_name):
+                raise AttributeError(f"Metoda '{method_name}' nu a fost gasita in clasa '{class_name}'.")
+            method = getattr(instance, method_name)
+        except Exception as e:
+            print(f"[ERROR] Validation failed: {e}")
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((requester_info[0], requester_info[1]))
+                self._send_msg(s, {
+                    "type": "EXEC_RES",
+                    "task_id": task_id,
+                    "thread_id": "MAIN",
+                    "result": f"Eroare validare: {str(e)}",
+                    "status": "ERROR"
+                })
+                s.close()
+            except:
+                pass
+            return
         
         def worker(t_id):
             self._update_my_load(1)
@@ -298,7 +323,8 @@ class P2PNode:
                         "type": "EXEC_RES",
                         "task_id": task_id,
                         "thread_id": t_id,
-                        "result": res
+                        "result": res,
+                        "status": "OK"
                     })
                     s.close()
                 except Exception as e:
@@ -306,6 +332,19 @@ class P2PNode:
                     
             except Exception as e:
                 print(f"[ERROR] Task execution failed: {e}")
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect((requester_info[0], requester_info[1]))
+                    self._send_msg(s, {
+                        "type": "EXEC_RES",
+                        "task_id": task_id,
+                        "thread_id": t_id,
+                        "result": f"Exceptie executie: {str(e)}",
+                        "status": "ERROR"
+                    })
+                    s.close()
+                except:
+                    pass
             finally:
                 self._update_my_load(-1)
 
@@ -316,29 +355,30 @@ class P2PNode:
         module_name = msg["module"]
         file_path = f"{module_name}.py"
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, "rb") as f:
                 content = f.read()
                 
             self._send_msg(sock, {
                 "type": "CLASS_RES",
                 "module": module_name,
                 "task_id": msg["task_id"],
-                "content": content
+                "content": base64.b64encode(content).decode('utf-8')
             })
-            print(f"[CLASS] Sent {file_path} to requester.")
+            print(f"[CLASS] Sent {file_path} to requester (base64 binary).")
         except Exception as e:
             print(f"[ERROR] Failed to read/send class {file_path}: {e}")
 
     def _handle_class_res(self, msg):
         module_name = msg["module"]
-        content = msg["content"]
+        content_b64 = msg["content"]
         task_id = msg["task_id"]
         
         file_path = f"{module_name}.py"
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
+            content = base64.b64decode(content_b64)
+            with open(file_path, "wb") as f:
                 f.write(content)
-            print(f"[CLASS] Received and saved {file_path}.")
+            print(f"[CLASS] Received and saved {file_path} (binary transfer).")
             
             # Reload module if it was partially loaded
             importlib.invalidate_caches()

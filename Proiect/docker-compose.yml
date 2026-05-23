@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  nod1:
+    build: .
+    command: python node.py 5001
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./nod1:/app
+      # Mapam node.py in interior ca sa avem acelasi cod in toate containerele,
+      # desi directorul /app va fi suprascris de ./nod1. Vom pune node.py direct inauntru daca nu e
+      - ./node.py:/app/node.py
+
+  nod2:
+    build: .
+    command: python node.py 5002 nod1:5001
+    ports:
+      - "5002:5002"
+    depends_on:
+      - nod1
+    volumes:
+      - ./nod2:/app
+      - ./node.py:/app/node.py
+
+  nod3:
+    build: .
+    command: python node.py 5003 nod1:5001
+    ports:
+      - "5003:5003"
+    depends_on:
+      - nod1
+    volumes:
+      - ./nod3:/app
+      - ./node.py:/app/node.py
